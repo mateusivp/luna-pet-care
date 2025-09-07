@@ -1,0 +1,238 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Função para verificar se o usuário está autenticado
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Função para verificar se o usuário é admin
+    function isAdmin() {
+      return isAuthenticated() && 
+             request.auth.token.role == 'admin';
+    }
+    
+    // Função para verificar se o usuário é funcionário
+    function isEmployee() {
+      return isAuthenticated() && 
+             request.auth.token.role == 'employee';
+    }
+    
+    // Função para verificar se o usuário tem acesso administrativo
+    function hasAdminAccess() {
+      return isAdmin() || isEmployee();
+    }
+    
+    // Função para verificar se é o próprio usuário
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Função para validar tipo de arquivo de imagem
+    function isValidImageType() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    
+    // Função para validar tipo de arquivo de documento
+    function isValidDocumentType() {
+      return request.resource.contentType in [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/plain'
+      ];
+    }
+    
+    // Função para validar tamanho do arquivo (5MB)
+    function isValidFileSize() {
+      return request.resource.size <= 5 * 1024 * 1024;
+    }
+    
+    // Função para validar tamanho de imagem (2MB)
+    function isValidImageSize() {
+      return request.resource.size <= 2 * 1024 * 1024;
+    }
+    
+    // ===== AVATARES DE USUÁRIOS =====
+    match /users/{userId}/avatar_{timestamp}_{fileName} {
+      // Leitura: usuário autenticado (avatares são públicos)
+      allow read: if isAuthenticated();
+      
+      // Upload: próprio usuário ou admin
+      allow write: if (isOwner(userId) || hasAdminAccess()) &&
+                      isValidImageType() &&
+                      isValidImageSize();
+      
+      // Exclusão: próprio usuário ou admin
+      allow delete: if isOwner(userId) || hasAdminAccess();
+    }
+    
+    // ===== FOTOS DE PETS =====
+    match /pets/{petId}/{fileName} {
+      // Leitura: usuário autenticado
+      allow read: if isAuthenticated();
+      
+      // Upload: usuário autenticado (validação de propriedade no Firestore)
+      allow write: if isAuthenticated() &&
+                      isValidImageType() &&
+                      isValidImageSize();
+      
+      // Exclusão: usuário autenticado ou admin
+      allow delete: if isAuthenticated() || hasAdminAccess();
+    }
+    
+    // ===== DOCUMENTOS DE CLIENTES =====
+    match /clients/{clientId}/documents/{fileName} {
+      // Leitura: admin, funcionário ou próprio cliente
+      allow read: if hasAdminAccess();
+      
+      // Upload: admin, funcionário ou próprio cliente
+      allow write: if hasAdminAccess() &&
+                      (isValidImageType() || isValidDocumentType()) &&
+                      isValidFileSize();
+      
+      // Exclusão: admin ou funcionário
+      allow delete: if hasAdminAccess();
+    }
+    
+    // ===== COMPROVANTES DE PAGAMENTO =====
+    match /payments/{paymentId}/receipts/{fileName} {
+      // Leitura: admin, funcionário
+      allow read: if hasAdminAccess();
+      
+      // Upload: sistema (webhooks) ou admin
+      allow write: if hasAdminAccess() &&
+                      (isValidImageType() || isValidDocumentType()) &&
+                      isValidFileSize();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== FOTOS DE SERVIÇOS =====
+    match /services/{serviceId}/images/{fileName} {
+      // Leitura: usuário autenticado
+      allow read: if isAuthenticated();
+      
+      // Upload: admin ou funcionário
+      allow write: if hasAdminAccess() &&
+                      isValidImageType() &&
+                      isValidImageSize();
+      
+      // Exclusão: admin ou funcionário
+      allow delete: if hasAdminAccess();
+    }
+    
+    // ===== RELATÓRIOS =====
+    match /reports/{reportId}/{fileName} {
+      // Leitura: admin e funcionários
+      allow read: if hasAdminAccess();
+      
+      // Upload: admin e funcionários
+      allow write: if hasAdminAccess() &&
+                      isValidDocumentType() &&
+                      isValidFileSize();
+      
+      // Exclusão: admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== BACKUP DE DADOS =====
+    match /backups/{fileName} {
+      // Leitura: apenas admin
+      allow read: if isAdmin();
+      
+      // Upload: apenas admin
+      allow write: if isAdmin() &&
+                      isValidFileSize();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== LOGS E AUDITORIA =====
+    match /logs/{logId}/{fileName} {
+      // Leitura: apenas admin
+      allow read: if isAdmin();
+      
+      // Upload: sistema (não permitir upload manual)
+      allow write: if false;
+      
+      // Exclusão: apenas admin (para limpeza)
+      allow delete: if isAdmin();
+    }
+    
+    // ===== CAMPANHAS DE MARKETING =====
+    match /campaigns/{campaignId}/assets/{fileName} {
+      // Leitura: admin e funcionários
+      allow read: if hasAdminAccess();
+      
+      // Upload: admin e funcionários
+      allow write: if hasAdminAccess() &&
+                      (isValidImageType() || isValidDocumentType()) &&
+                      isValidFileSize();
+      
+      // Exclusão: admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== ARQUIVOS TEMPORÁRIOS =====
+    match /temp/{userId}/{fileName} {
+      // Leitura: próprio usuário ou admin
+      allow read: if isOwner(userId) || hasAdminAccess();
+      
+      // Upload: próprio usuário ou admin (arquivos temporários)
+      allow write: if (isOwner(userId) || hasAdminAccess()) &&
+                      (isValidImageType() || isValidDocumentType()) &&
+                      isValidFileSize();
+      
+      // Exclusão: próprio usuário ou admin
+      allow delete: if isOwner(userId) || hasAdminAccess();
+    }
+    
+    // ===== ARQUIVOS PÚBLICOS =====
+    match /public/{fileName} {
+      // Leitura: todos (arquivos públicos como logos, etc.)
+      allow read;
+      
+      // Upload: apenas admin
+      allow write: if isAdmin() &&
+                      (isValidImageType() || isValidDocumentType()) &&
+                      isValidFileSize();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== CACHE DE IMAGENS =====
+    match /cache/{path=**} {
+      // Leitura: usuário autenticado
+      allow read: if isAuthenticated();
+      
+      // Upload: sistema (não permitir upload manual)
+      allow write: if false;
+      
+      // Exclusão: admin (para limpeza de cache)
+      allow delete: if isAdmin();
+    }
+    
+    // ===== ARQUIVOS DE CONFIGURAÇÃO =====
+    match /config/{fileName} {
+      // Leitura: admin
+      allow read: if isAdmin();
+      
+      // Upload: admin
+      allow write: if isAdmin() &&
+                      isValidDocumentType() &&
+                      isValidFileSize();
+      
+      // Exclusão: admin
+      allow delete: if isAdmin();
+    }
+    
+    // Regra padrão: negar acesso a qualquer outro arquivo
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

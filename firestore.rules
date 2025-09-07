@@ -1,0 +1,297 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Função para verificar se o usuário está autenticado
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Função para verificar se o usuário é admin
+    function isAdmin() {
+      return isAuthenticated() && 
+             request.auth.token.role == 'admin';
+    }
+    
+    // Função para verificar se o usuário é cliente
+    function isClient() {
+      return isAuthenticated() && 
+             request.auth.token.role == 'client';
+    }
+    
+    // Função para verificar se o usuário é motorista
+    function isDriver() {
+      return isAuthenticated() && 
+             request.auth.token.role == 'driver';
+    }
+    
+    // Função para verificar se o usuário é funcionário
+    function isEmployee() {
+      return isAuthenticated() && 
+             request.auth.token.role == 'employee';
+    }
+    
+    // Função para verificar se o usuário tem acesso administrativo
+    function hasAdminAccess() {
+      return isAdmin() || isEmployee();
+    }
+    
+    // Função para verificar se é o próprio usuário
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Função para verificar se o documento pertence ao usuário
+    function belongsToUser(userId) {
+      return isAuthenticated() && 
+             (request.auth.uid == userId || hasAdminAccess());
+    }
+    
+    // ===== USUÁRIOS =====
+    match /users/{userId} {
+      // Leitura: próprio usuário ou admin
+      allow read: if isOwner(userId) || hasAdminAccess();
+      
+      // Criação: apenas durante o registro (sem role definido ainda)
+      allow create: if isAuthenticated() && 
+                       request.auth.uid == userId &&
+                       request.resource.data.keys().hasAll(['email', 'name', 'role']) &&
+                       request.resource.data.role in ['client', 'admin', 'driver', 'employee'];
+      
+      // Atualização: próprio usuário (campos limitados) ou admin (todos os campos)
+      allow update: if isOwner(userId) && 
+                       !('role' in request.resource.data.diff(resource.data).affectedKeys()) ||
+                       hasAdminAccess();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== CLIENTES =====
+    match /clients/{clientId} {
+      // Leitura: admin, funcionário ou próprio cliente
+      allow read: if hasAdminAccess() || 
+                     (isClient() && resource.data.userId == request.auth.uid);
+      
+      // Criação: admin, funcionário ou próprio cliente
+      allow create: if hasAdminAccess() || 
+                       (isClient() && request.resource.data.userId == request.auth.uid);
+      
+      // Atualização: admin, funcionário ou próprio cliente
+      allow update: if hasAdminAccess() || 
+                       (isClient() && resource.data.userId == request.auth.uid);
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== PETS =====
+    match /pets/{petId} {
+      // Leitura: admin, funcionário ou dono do pet
+      allow read: if hasAdminAccess() || 
+                     (isClient() && resource.data.userId == request.auth.uid);
+      
+      // Criação: admin, funcionário ou cliente (próprio pet)
+      allow create: if hasAdminAccess() || 
+                       (isClient() && request.resource.data.userId == request.auth.uid);
+      
+      // Atualização: admin, funcionário ou dono do pet
+      allow update: if hasAdminAccess() || 
+                       (isClient() && resource.data.userId == request.auth.uid);
+      
+      // Exclusão: admin ou dono do pet
+      allow delete: if isAdmin() || 
+                       (isClient() && resource.data.userId == request.auth.uid);
+    }
+    
+    // ===== SERVIÇOS =====
+    match /services/{serviceId} {
+      // Leitura: todos os usuários autenticados
+      allow read: if isAuthenticated();
+      
+      // Criação: apenas admin e funcionários
+      allow create: if hasAdminAccess();
+      
+      // Atualização: apenas admin e funcionários
+      allow update: if hasAdminAccess();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== AGENDAMENTOS =====
+    match /appointments/{appointmentId} {
+      // Leitura: admin, funcionário, cliente (próprios agendamentos) ou motorista (para taxi dog)
+      allow read: if hasAdminAccess() || 
+                     (isClient() && resource.data.clientId == request.auth.uid) ||
+                     (isDriver() && resource.data.type == 'taxi_dog');
+      
+      // Criação: admin, funcionário ou cliente (próprios agendamentos)
+      allow create: if hasAdminAccess() || 
+                       (isClient() && request.resource.data.clientId == request.auth.uid);
+      
+      // Atualização: admin, funcionário, cliente (próprios agendamentos) ou motorista (status taxi dog)
+      allow update: if hasAdminAccess() || 
+                       (isClient() && resource.data.clientId == request.auth.uid) ||
+                       (isDriver() && resource.data.type == 'taxi_dog' && 
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'driverNotes', 'updatedAt']));
+      
+      // Exclusão: admin ou cliente (próprios agendamentos)
+      allow delete: if isAdmin() || 
+                       (isClient() && resource.data.clientId == request.auth.uid);
+    }
+    
+    // ===== TAXI RIDES =====
+    match /taxiRides/{rideId} {
+      // Leitura: admin, funcionário, cliente (próprias corridas) ou motorista (corridas atribuídas)
+      allow read: if hasAdminAccess() || 
+                     (isClient() && resource.data.clientId == request.auth.uid) ||
+                     (isDriver() && resource.data.driverId == request.auth.uid);
+      
+      // Criação: admin, funcionário ou cliente
+      allow create: if hasAdminAccess() || 
+                       (isClient() && request.resource.data.clientId == request.auth.uid);
+      
+      // Atualização: admin, funcionário, cliente (próprias corridas) ou motorista (corridas atribuídas)
+      allow update: if hasAdminAccess() || 
+                       (isClient() && resource.data.clientId == request.auth.uid && 
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'clientNotes', 'updatedAt'])) ||
+                       (isDriver() && resource.data.driverId == request.auth.uid && 
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'driverLocation', 'driverNotes', 'updatedAt']));
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== PAGAMENTOS =====
+    match /payments/{paymentId} {
+      // Leitura: admin, funcionário ou cliente (próprios pagamentos)
+      allow read: if hasAdminAccess() || 
+                     (isClient() && resource.data.clientId == request.auth.uid);
+      
+      // Criação: admin, funcionário ou sistema (webhooks)
+      allow create: if hasAdminAccess();
+      
+      // Atualização: admin, funcionário ou sistema (webhooks)
+      allow update: if hasAdminAccess();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== NOTIFICAÇÕES =====
+    match /notifications/{notificationId} {
+      // Leitura: admin, funcionário ou destinatário da notificação
+      allow read: if hasAdminAccess() || 
+                     (isAuthenticated() && resource.data.userId == request.auth.uid);
+      
+      // Criação: admin, funcionário ou sistema
+      allow create: if hasAdminAccess();
+      
+      // Atualização: admin, funcionário ou destinatário (apenas status de leitura)
+      allow update: if hasAdminAccess() || 
+                       (isAuthenticated() && resource.data.userId == request.auth.uid && 
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt', 'updatedAt']));
+      
+      // Exclusão: admin ou destinatário
+      allow delete: if isAdmin() || 
+                       (isAuthenticated() && resource.data.userId == request.auth.uid);
+    }
+    
+    // ===== REVIEWS/AVALIAÇÕES =====
+    match /reviews/{reviewId} {
+      // Leitura: todos os usuários autenticados
+      allow read: if isAuthenticated();
+      
+      // Criação: apenas clientes (próprias avaliações)
+      allow create: if isClient() && request.resource.data.clientId == request.auth.uid;
+      
+      // Atualização: admin ou autor da avaliação
+      allow update: if isAdmin() || 
+                       (isClient() && resource.data.clientId == request.auth.uid);
+      
+      // Exclusão: admin ou autor da avaliação
+      allow delete: if isAdmin() || 
+                       (isClient() && resource.data.clientId == request.auth.uid);
+    }
+    
+    // ===== CONFIGURAÇÕES DO SISTEMA =====
+    match /settings/{settingId} {
+      // Leitura: todos os usuários autenticados
+      allow read: if isAuthenticated();
+      
+      // Criação: apenas admin
+      allow create: if isAdmin();
+      
+      // Atualização: apenas admin
+      allow update: if isAdmin();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== LOGS/AUDITORIA =====
+    match /logs/{logId} {
+      // Leitura: apenas admin
+      allow read: if isAdmin();
+      
+      // Criação: sistema (não permitir criação manual)
+      allow create: if false;
+      
+      // Atualização: não permitir
+      allow update: if false;
+      
+      // Exclusão: apenas admin (para limpeza)
+      allow delete: if isAdmin();
+    }
+    
+    // ===== RELATÓRIOS =====
+    match /reports/{reportId} {
+      // Leitura: admin e funcionários
+      allow read: if hasAdminAccess();
+      
+      // Criação: admin e funcionários
+      allow create: if hasAdminAccess();
+      
+      // Atualização: admin e funcionários
+      allow update: if hasAdminAccess();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== INVENTÁRIO/ESTOQUE =====
+    match /inventory/{itemId} {
+      // Leitura: admin e funcionários
+      allow read: if hasAdminAccess();
+      
+      // Criação: admin e funcionários
+      allow create: if hasAdminAccess();
+      
+      // Atualização: admin e funcionários
+      allow update: if hasAdminAccess();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // ===== CAMPANHAS DE MARKETING =====
+    match /campaigns/{campaignId} {
+      // Leitura: admin e funcionários
+      allow read: if hasAdminAccess();
+      
+      // Criação: admin e funcionários
+      allow create: if hasAdminAccess();
+      
+      // Atualização: admin e funcionários
+      allow update: if hasAdminAccess();
+      
+      // Exclusão: apenas admin
+      allow delete: if isAdmin();
+    }
+    
+    // Regra padrão: negar acesso a qualquer outra coleção
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
